@@ -53,9 +53,14 @@ function runPwsh(script, timeoutMs = 20000) {
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
+      "-OutputFormat",
+      "Text",
       "-EncodedCommand",
       encodedCommand
-    ], { stdio: ["ignore", "pipe", "pipe"] });
+    ], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
 
     let stdout = "";
     let stderr = "";
@@ -67,7 +72,7 @@ function runPwsh(script, timeoutMs = 20000) {
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      stdout += chunk.toString("utf8");
       if (Buffer.byteLength(stdout, "utf8") > MAX_OUTPUT_BYTES) {
         killedForSize = true;
         child.kill("SIGKILL");
@@ -75,7 +80,7 @@ function runPwsh(script, timeoutMs = 20000) {
     });
 
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      stderr += chunk.toString("utf8");
       if (Buffer.byteLength(stderr, "utf8") > MAX_OUTPUT_BYTES) {
         killedForSize = true;
         child.kill("SIGKILL");
@@ -94,21 +99,39 @@ function runPwsh(script, timeoutMs = 20000) {
         return;
       }
 
-      const trimmed = stdout.trim();
-
       if (code !== 0) {
-        reject(new Error(stderr.trim() || trimmed || `PowerShell exited with code ${code}.`));
-        return;
-      }
-
-      if (!trimmed) {
-        reject(new Error(`PowerShell returned no stdout. stderr: ${stderr.trim() || "<empty>"}`));
+        reject(new Error(stderr.trim() || stdout.trim() || `PowerShell exited with code ${code}.`));
         return;
       }
 
       resolve({ stdout, stderr, code, executable });
     });
   });
+}
+
+function parseJsonFromPowerShell(stdout) {
+  const text = String(stdout ?? "").replace(/^\uFEFF/, "").trim();
+  if (!text) {
+    throw new Error("PowerShell returned empty stdout.");
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const objectStart = text.indexOf("{");
+    const objectEnd = text.lastIndexOf("}");
+    if (objectStart >= 0 && objectEnd > objectStart) {
+      return JSON.parse(text.slice(objectStart, objectEnd + 1));
+    }
+
+    const arrayStart = text.indexOf("[");
+    const arrayEnd = text.lastIndexOf("]");
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      return JSON.parse(text.slice(arrayStart, arrayEnd + 1));
+    }
+
+    throw new Error(`PowerShell stdout was not valid JSON. Raw stdout: ${JSON.stringify(text.slice(0, 2000))}`);
+  }
 }
 
 function encodeScript(script) {
@@ -118,16 +141,30 @@ function encodeScript(script) {
 export async function getHealth() {
   try {
     const probe = `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$DebugPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
 $analyzer = [bool](Get-Module -ListAvailable -Name PSScriptAnalyzer | Select-Object -First 1)
 [pscustomobject]@{
   ok = $true
   powershell = $PSVersionTable.PSEdition
   version = $PSVersionTable.PSVersion.ToString()
   psscriptAnalyzerAvailable = $analyzer
-} | ConvertTo-Json -Compress
+} | ConvertTo-Json -Compress | Write-Output
 `;
-    const { stdout, executable } = await runPwsh(probe, 5000);
-    return { ...JSON.parse(stdout.trim()), executable };
+    const { stdout, stderr, executable, code } = await runPwsh(probe, 5000);
+    const parsed = parseJsonFromPowerShell(stdout);
+    return {
+      ...parsed,
+      executable,
+      diagnostics: {
+        exitCode: code,
+        stderr: stderr.trim()
+      }
+    };
   } catch (error) {
     return {
       ok: false,
@@ -144,6 +181,11 @@ export async function analyzePowerShell(source, includeScriptAnalyzer = true) {
   const encoded = encodeScript(source);
   const ps = `
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$DebugPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
 $source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))
 
 $tokens = $null
@@ -259,10 +301,10 @@ $result = [pscustomobject]@{
   analyzerFindings = @($analyzerFindings)
 }
 
-$result | ConvertTo-Json -Depth 8 -Compress
+$result | ConvertTo-Json -Depth 8 -Compress | Write-Output
 `;
   const { stdout } = await runPwsh(ps);
-  return JSON.parse(stdout.trim());
+  return parseJsonFromPowerShell(stdout);
 }
 
 export async function createPesterSkeleton(source) {
