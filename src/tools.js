@@ -48,8 +48,8 @@ function runPwsh(script, timeoutMs = 20000) {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "-"
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+      script
+    ], { stdio: ["ignore", "pipe", "pipe"] });
 
     let stdout = "";
     let stderr = "";
@@ -93,8 +93,6 @@ function runPwsh(script, timeoutMs = 20000) {
       }
       resolve({ stdout, stderr, code, executable });
     });
-
-    child.stdin.end(script);
   });
 }
 
