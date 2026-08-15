@@ -1,0 +1,21 @@
+{
+  "name": "pssage-chatgpt-plugin",
+  "version": "0.1.0",
+  "description": "PSSage: a ChatGPT MCP plugin for deterministic PowerShell analysis.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.2",
+    "express": "^5.1.0",
+    "zod": "^3.25.76"
+  },
+  "license": "MIT"
+}
