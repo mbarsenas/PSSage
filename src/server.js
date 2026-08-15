@@ -16,7 +16,7 @@ function buildServer() {
   const server = new McpServer(
     {
       name: "pssage",
-      version: "0.1.0"
+      version: "0.1.1"
     },
     {
       instructions:
@@ -164,9 +164,15 @@ function buildServer() {
     },
     async () => {
       const result = await getHealth();
+      const publicResult = {
+        ok: Boolean(result.ok),
+        powershell: String(result.powershell || ""),
+        version: String(result.version || ""),
+        psscriptAnalyzerAvailable: Boolean(result.psscriptAnalyzerAvailable)
+      };
       return {
-        structuredContent: result,
-        content: [{ type: "text", text: result.ok ? `PSSage is healthy on PowerShell ${result.version}.` : "PSSage cannot locate PowerShell." }]
+        structuredContent: publicResult,
+        content: [{ type: "text", text: publicResult.ok ? `PSSage is healthy on PowerShell ${publicResult.version}.` : "PSSage cannot locate PowerShell." }]
       };
     }
   );
