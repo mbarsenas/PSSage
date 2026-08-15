@@ -1,10 +1,49 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
+function resolvePwshPath() {
+  const configured = process.env.PWSH_PATH?.trim();
+  if (configured && fs.existsSync(configured)) {
+    return configured;
+  }
+
+  const candidates = [];
+
+  if (process.platform === "win32") {
+    const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+    candidates.push(`${programFiles}\\PowerShell\\7\\pwsh.exe`);
+
+    const windowsApps = `${programFiles}\\WindowsApps`;
+    if (fs.existsSync(windowsApps)) {
+      try {
+        const matches = fs.readdirSync(windowsApps)
+          .filter((name) => /^Microsoft\.PowerShell_7\.[^_]+_x64__8wekyb3d8bbwe$/i.test(name))
+          .sort()
+          .reverse();
+        for (const match of matches) {
+          candidates.push(`${windowsApps}\\${match}\\pwsh.exe`);
+        }
+      } catch {
+        // WindowsApps may not be enumerable depending on permissions.
+      }
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "pwsh";
+}
+
 function runPwsh(script, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.env.PWSH_PATH || "pwsh", [
+    const executable = resolvePwshPath();
+    const child = spawn(executable, [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
@@ -39,7 +78,7 @@ function runPwsh(script, timeoutMs = 20000) {
 
     child.on("error", (error) => {
       clearTimeout(timer);
-      reject(error);
+      reject(new Error(`Failed to start PowerShell from '${executable}': ${error.message}`));
     });
 
     child.on("close", (code) => {
@@ -52,7 +91,7 @@ function runPwsh(script, timeoutMs = 20000) {
         reject(new Error(stderr.trim() || `PowerShell exited with code ${code}.`));
         return;
       }
-      resolve({ stdout, stderr, code });
+      resolve({ stdout, stderr, code, executable });
     });
 
     child.stdin.end(script);
@@ -74,14 +113,16 @@ $analyzer = [bool](Get-Module -ListAvailable -Name PSScriptAnalyzer | Select-Obj
   psscriptAnalyzerAvailable = $analyzer
 } | ConvertTo-Json -Compress
 `;
-    const { stdout } = await runPwsh(probe, 5000);
-    return JSON.parse(stdout.trim());
-  } catch {
+    const { stdout, executable } = await runPwsh(probe, 5000);
+    return { ...JSON.parse(stdout.trim()), executable };
+  } catch (error) {
     return {
       ok: false,
       powershell: "",
       version: "",
-      psscriptAnalyzerAvailable: false
+      psscriptAnalyzerAvailable: false,
+      executable: resolvePwshPath(),
+      error: error instanceof Error ? error.message : String(error)
     };
   }
 }
