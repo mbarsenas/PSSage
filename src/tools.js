@@ -40,15 +40,21 @@ function resolvePwshPath() {
   return "pwsh";
 }
 
+function toEncodedCommand(script) {
+  return Buffer.from(script, "utf16le").toString("base64");
+}
+
 function runPwsh(script, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     const executable = resolvePwshPath();
+    const encodedCommand = toEncodedCommand(script);
+
     const child = spawn(executable, [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
-      "-Command",
-      script
+      "-EncodedCommand",
+      encodedCommand
     ], { stdio: ["ignore", "pipe", "pipe"] });
 
     let stdout = "";
@@ -87,10 +93,19 @@ function runPwsh(script, timeoutMs = 20000) {
         reject(new Error("PowerShell output exceeded the allowed size."));
         return;
       }
-      if (code !== 0 && !stdout.trim()) {
-        reject(new Error(stderr.trim() || `PowerShell exited with code ${code}.`));
+
+      const trimmed = stdout.trim();
+
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || trimmed || `PowerShell exited with code ${code}.`));
         return;
       }
+
+      if (!trimmed) {
+        reject(new Error(`PowerShell returned no stdout. stderr: ${stderr.trim() || "<empty>"}`));
+        return;
+      }
+
       resolve({ stdout, stderr, code, executable });
     });
   });
